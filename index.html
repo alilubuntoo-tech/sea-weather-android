@@ -11,9 +11,9 @@
 <link rel="manifest" href="manifest.json">
 <title>Sea Weather Android</title>
 <style>
-  :root { --bg:#eaf4fb; --card:#fff; --text:#12303f; --muted:#5d7a8a; --accent:#0b5ea8; }
+  :root { --bg:#eaf4fb; --card:rgba(255,255,255,.86); --text:#12303f; --muted:#5d7a8a; --accent:#0b5ea8; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#08202f; --card:#102f43; --text:#e6f3fa; --muted:#8fb1c4; --accent:#4aa3e8; }
+    :root { --bg:#08202f; --card:rgba(10,38,56,.80); --text:#e6f3fa; --muted:#8fb1c4; --accent:#4aa3e8; }
   }
   * { box-sizing: border-box; }
   html, body { margin:0; background:var(--bg); color:var(--text);
@@ -38,9 +38,13 @@
   .hr { flex:0 0 66px; background:var(--card); border-radius:14px; padding:10px 6px;
         text-align:center; display:flex; flex-direction:column; gap:4px; font-size:.85rem; }
   .note { font-size:.75rem; color:var(--muted); margin-top:12px; text-align:center; }
-  .photo { display:block; width:100%; aspect-ratio:2/1; object-fit:cover;
-           border-radius:16px; margin-top:14px; }
   #status { text-align:center; color:var(--muted); font-size:.85rem; margin-top:14px; }
+  html { background:var(--bg); }
+  body { background:none; }
+  body::before { content:""; position:fixed; inset:0; z-index:-1;
+    background:linear-gradient(rgba(4,24,40,.25), rgba(4,24,40,.50)), url(background.jpg) center/cover no-repeat; }
+  .card, select, .hr { backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
+  h1, h2, .note, #status { color:#fff; text-shadow:0 1px 4px rgba(0,0,0,.65); }
 </style>
 </head>
 <body>
@@ -50,11 +54,7 @@
   <button id="refresh">Refresh</button>
 </div>
 
-<div class="card safe" id="safe">
-  <div class="label">Swimming conditions</div>
-  <div class="value" id="safeText">–</div>
-  <div class="sub" id="safeSub"></div>
-</div>
+<div id="conds"></div>
 
 <div class="grid">
   <div class="card"><div class="label">Air temperature</div><div class="value" id="temp">–</div></div>
@@ -66,9 +66,8 @@
 </div>
 <h2>Next 12 hours</h2>
 <div class="hours" id="hours"></div>
-<div class="note">The swimming indicator is only a rough estimate. Always follow lifeguards and beach flags.</div>
+<div class="note">These indicators are only rough estimates (offshore wind direction is approximate). Always follow lifeguards and beach flags.</div>
 <div id="status"></div>
-<img class="photo" src="seaside.jpg" alt="Fishermen by the sea" loading="lazy">
 
 <script>
 if ("serviceWorker" in navigator) { navigator.serviceWorker.register("sw.js").catch(() => {}); }
@@ -142,19 +141,47 @@ function emoji(c) {
 }
 
 function showSafety(w, m) {
-  const wave = m.wave_height, gust = w.wind_gusts_10m;
-  let color, txt;
-  if (w.weather_code >= 95 || (wave != null && wave >= 1.2) || gust >= 50) { color = "#e53935"; txt = "🔴 Not recommended"; }
-  else if ((wave != null && wave >= 0.6) || gust >= 35) { color = "#fbc02d"; txt = "🟡 Use caution"; }
-  else if (wave == null) { color = "#9e9e9e"; txt = "⚪ Wave data unavailable"; }
-  else { color = "#43a047"; txt = "🟢 Good conditions"; }
-  $("safe").style.borderLeftColor = color;
-  $("safeText").textContent = txt;
-  const parts = [];
-  if (wave != null) parts.push("waves " + wave.toFixed(1) + " m");
-  parts.push("wind " + Math.round(w.wind_speed_10m) + " km/h", "gusts " + Math.round(gust));
-  if (w.weather_code >= 95) parts.push("thunderstorm");
-  $("safeSub").textContent = parts.join(" · ");
+  const wave = m.wave_height, wind = w.wind_speed_10m, gust = w.wind_gusts_10m,
+        dir = w.wind_direction_10m, storm = w.weather_code >= 95;
+  const offshore = dir != null && dir >= 45 && dir <= 135;   // wind blowing from land to sea (approx.)
+  const R = "#e53935", Y = "#fbc02d", G = "#43a047", N = "#9e9e9e";
+  const info = "waves " + (wave != null ? wave.toFixed(1) + " m" : "n/a") + " · wind " +
+    Math.round(wind) + " km/h " + compass(dir) + " · gusts " + Math.round(gust);
+  const drift = offshore && wind >= 12 ? " · offshore wind: risk of drifting out to sea" : "";
+
+  let sw;
+  if (storm || (wave != null && wave >= 1.2) || gust >= 50) sw = [R, "🔴 Not recommended"];
+  else if ((wave != null && wave >= 0.6) || gust >= 35) sw = [Y, "🟡 Use caution"];
+  else if (wave == null) sw = [N, "⚪ Wave data unavailable"];
+  else sw = [G, "🟢 Good conditions"];
+
+  let ws;
+  if (storm || wind >= 55 || gust >= 70 || (wave != null && wave >= 2)) ws = [R, "🔴 Too dangerous"];
+  else if (wind < 14) ws = [N, "⚪ Too little wind"];
+  else if (wind < 22) ws = [Y, "🟡 Light wind"];
+  else if (wind <= 45) ws = offshore ? [Y, "🟡 Good wind, but offshore"] : [G, "🟢 Good wind"];
+  else ws = [Y, "🟡 Strong – experienced only"];
+
+  let sp;
+  if (storm || (wave != null && wave >= 0.9) || wind >= 28 || gust >= 40) sp = [R, "🔴 Not recommended"];
+  else if ((wave != null && wave >= 0.5) || wind >= 18 || gust >= 28 || (offshore && wind >= 12)) sp = [Y, "🟡 Use caution"];
+  else if (wave == null) sp = [N, "⚪ Wave data unavailable"];
+  else sp = [G, "🟢 Calm – great for SUP"];
+
+  const rows = [["Swimming conditions", sw, ""], ["Windsurfing conditions", ws, drift],
+                ["SUP (paddleboard) conditions", sp, drift]];
+  const box = $("conds");
+  box.innerHTML = "";
+  rows.forEach(r => {
+    const d = document.createElement("div");
+    d.className = "card safe";
+    d.style.borderLeftColor = r[1][0];
+    d.innerHTML = '<div class="label"></div><div class="value"></div><div class="sub"></div>';
+    d.children[0].textContent = r[0];
+    d.children[1].textContent = r[1][1];
+    d.children[2].textContent = info + r[2];
+    box.appendChild(d);
+  });
 }
 
 function showHours(wd, md) {
