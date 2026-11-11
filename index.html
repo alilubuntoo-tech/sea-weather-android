@@ -32,19 +32,28 @@
   .label { font-size:.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
   .value { font-size:1.5rem; font-weight:700; margin-top:4px; }
   .sub { font-size:.9rem; color:var(--muted); margin-top:2px; }
+  h2 { font-size:1rem; margin:18px 0 0; }
+  .safe { margin-bottom:10px; border-left:8px solid var(--muted); }
+  .hours { display:flex; gap:8px; overflow-x:auto; padding:8px 0 6px; }
+  .hr { flex:0 0 66px; background:var(--card); border-radius:14px; padding:10px 6px;
+        text-align:center; display:flex; flex-direction:column; gap:4px; font-size:.85rem; }
+  .note { font-size:.75rem; color:var(--muted); margin-top:12px; text-align:center; }
+  .photo { display:block; width:100%; aspect-ratio:2/1; object-fit:cover;
+           border-radius:16px; margin-top:14px; }
   #status { text-align:center; color:var(--muted); font-size:.85rem; margin-top:14px; }
 </style>
 </head>
 <body>
 <h1>🌊 Sea Weather</h1>
 <div class="bar">
-  <select id="place">
-    <option>Hof Dor</option>
-    <option>Haifa</option>
-    <option>Atlit</option>
-    <option>Caesarea</option>
-  </select>
+  <select id="place"></select>
   <button id="refresh">Refresh</button>
+</div>
+
+<div class="card safe" id="safe">
+  <div class="label">Swimming conditions</div>
+  <div class="value" id="safeText">–</div>
+  <div class="sub" id="safeSub"></div>
 </div>
 
 <div class="grid">
@@ -55,16 +64,24 @@
   <div class="card wide"><div class="label">Wind</div><div class="value" id="wind">–</div><div class="sub" id="windSub"></div></div>
   <div class="card wide"><div class="label">Sky</div><div class="value" id="sky">–</div><div class="sub" id="skySub"></div></div>
 </div>
+<h2>Next 12 hours</h2>
+<div class="hours" id="hours"></div>
+<div class="note">The swimming indicator is only a rough estimate. Always follow lifeguards and beach flags.</div>
 <div id="status"></div>
+<img class="photo" src="seaside.jpg" alt="Fishermen by the sea" loading="lazy">
 
 <script>
 if ("serviceWorker" in navigator) { navigator.serviceWorker.register("sw.js").catch(() => {}); }
 // name: [land lat, land lon, sea lat, sea lon]  (waves are measured just offshore)
 const PLACES = {
-  "Hof Dor":  [32.615, 34.915, 32.615, 34.850],
+  "Nahariya": [33.005, 35.093, 33.005, 35.030],
+  "Akko":     [32.920, 35.070, 32.930, 35.000],
   "Haifa":    [32.820, 34.970, 32.840, 34.900],
   "Atlit":    [32.690, 34.940, 32.690, 34.880],
-  "Caesarea": [32.500, 34.890, 32.500, 34.820]
+  "Hof Dor":  [32.615, 34.915, 32.615, 34.850],
+  "Caesarea": [32.500, 34.890, 32.500, 34.820],
+  "Netanya":  [32.335, 34.850, 32.335, 34.780],
+  "Tel Aviv": [32.080, 34.765, 32.080, 34.700]
 };
 const CODES = {0:"Clear sky",1:"Mostly clear",2:"Partly cloudy",3:"Overcast",45:"Fog",48:"Rime fog",
   51:"Light drizzle",53:"Drizzle",55:"Heavy drizzle",61:"Light rain",63:"Rain",65:"Heavy rain",
@@ -73,6 +90,7 @@ const DIRS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W"
 const compass = d => (d == null ? "" : DIRS[Math.round(d / 22.5) % 16]);
 const $ = id => document.getElementById(id);
 const placeSel = $("place");
+Object.keys(PLACES).forEach(n => placeSel.add(new Option(n, n)));
 
 try { const saved = localStorage.getItem("place"); if (saved && PLACES[saved]) placeSel.value = saved; } catch (e) {}
 
@@ -83,9 +101,9 @@ async function load() {
   try { localStorage.setItem("place", name); } catch (e) {}
 
   const weatherUrl = "https://api.open-meteo.com/v1/forecast?latitude=" + lat + "&longitude=" + lon +
-    "&timezone=auto&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,wind_gusts_10m,weather_code,cloud_cover";
+    "&timezone=auto&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,wind_gusts_10m,weather_code,cloud_cover&hourly=temperature_2m,wind_speed_10m,weather_code&forecast_days=2";
   const marineUrl = "https://marine-api.open-meteo.com/v1/marine?latitude=" + slat + "&longitude=" + slon +
-    "&timezone=auto&current=wave_height,wave_period,wave_direction,sea_surface_temperature";
+    "&timezone=auto&current=wave_height,wave_period,wave_direction,sea_surface_temperature&hourly=wave_height&forecast_days=2";
 
   try {
     const [wRes, mRes] = await Promise.allSettled([
@@ -109,10 +127,52 @@ async function load() {
     if (m.wave_period != null) bits.push("period " + Math.round(m.wave_period) + " s");
     if (m.wave_direction != null) bits.push("from " + compass(m.wave_direction));
     $("waveSub").textContent = bits.join(", ");
+    showSafety(w, m);
+    showHours(wRes.value, mRes.status === "fulfilled" ? mRes.value : {});
 
     $("status").textContent = name + " · updated " + w.time.replace("T", " ");
   } catch (e) {
     $("status").textContent = "Could not load data. Check your internet connection.";
+  }
+}
+
+function emoji(c) {
+  if (c === 0) return "☀️"; if (c <= 2) return "🌤️"; if (c === 3) return "☁️";
+  if (c === 45 || c === 48) return "🌫️"; if (c >= 95) return "⛈️"; return "🌧️";
+}
+
+function showSafety(w, m) {
+  const wave = m.wave_height, gust = w.wind_gusts_10m;
+  let color, txt;
+  if (w.weather_code >= 95 || (wave != null && wave >= 1.2) || gust >= 50) { color = "#e53935"; txt = "🔴 Not recommended"; }
+  else if ((wave != null && wave >= 0.6) || gust >= 35) { color = "#fbc02d"; txt = "🟡 Use caution"; }
+  else if (wave == null) { color = "#9e9e9e"; txt = "⚪ Wave data unavailable"; }
+  else { color = "#43a047"; txt = "🟢 Good conditions"; }
+  $("safe").style.borderLeftColor = color;
+  $("safeText").textContent = txt;
+  const parts = [];
+  if (wave != null) parts.push("waves " + wave.toFixed(1) + " m");
+  parts.push("wind " + Math.round(w.wind_speed_10m) + " km/h", "gusts " + Math.round(gust));
+  if (w.weather_code >= 95) parts.push("thunderstorm");
+  $("safeSub").textContent = parts.join(" · ");
+}
+
+function showHours(wd, md) {
+  const box = $("hours"), h = wd.hourly, mh = md.hourly;
+  box.innerHTML = "";
+  if (!h) return;
+  const now = wd.current.time.slice(0, 13);
+  let i = h.time.findIndex(t => t.slice(0, 13) >= now);
+  if (i < 0) i = 0;
+  for (let k = i; k < Math.min(i + 12, h.time.length); k++) {
+    const wi = mh && mh.time ? mh.time.indexOf(h.time[k]) : -1;
+    const wv = wi >= 0 ? mh.wave_height[wi] : null;
+    const d = document.createElement("div");
+    d.className = "hr";
+    d.innerHTML = "<b>" + h.time[k].slice(11, 16) + "</b><span>" + emoji(h.weather_code[k]) +
+      "</span><span>" + Math.round(h.temperature_2m[k]) + "°</span><span>💨 " +
+      Math.round(h.wind_speed_10m[k]) + "</span><span>🌊 " + (wv != null ? wv.toFixed(1) : "–") + "</span>";
+    box.appendChild(d);
   }
 }
 
