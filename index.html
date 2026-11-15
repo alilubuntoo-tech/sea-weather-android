@@ -255,7 +255,7 @@ function showHours(wd, md) {
 }
 
 // ---- Safety timer (talks to your own Cloudflare Worker) ----
-let stDeadline = null, stAlerted = false, stErr = "", stGpsNote = "";
+let stDeadline = null, stAlerted = false, stErr = "", stGpsNote = "", stLocating = false;
 const stGet = k => { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } };
 function stSetup() {
   const u = prompt("Safety server address (https://….workers.dev):", stGet("stUrl"));
@@ -275,6 +275,7 @@ async function stCall(path, body) {
   return r.json();
 }
 function stTick() {
+  if (stLocating) return;
   const st = $("stState"), sub = $("stSub");
   if (stErr) {
     st.textContent = "❌ " + stErr;
@@ -294,28 +295,44 @@ async function stAct(path, body) {
   } catch (e) { stErr = e.message; }
   stTick();
 }
-// Ask the phone for its exact GPS position (falls back to the beach's point after 15 s).
+// Ask the phone for its exact GPS position. Listens for up to 12 s and keeps the most
+// accurate fix (stops early once it is within 20 m). Returns null if location is unavailable.
 function stGps() {
   return new Promise(res => {
     if (!navigator.geolocation) return res(null);
-    navigator.geolocation.getCurrentPosition(
-      p => res({ lat: +p.coords.latitude.toFixed(6), lon: +p.coords.longitude.toFixed(6), acc: Math.round(p.coords.accuracy) }),
-      () => res(null),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+    let best = null, done = false, id = null;
+    const finish = () => {
+      if (done) return; done = true;
+      if (id !== null) navigator.geolocation.clearWatch(id);
+      res(best);
+    };
+    id = navigator.geolocation.watchPosition(
+      p => {
+        const fix = { lat: +p.coords.latitude.toFixed(6), lon: +p.coords.longitude.toFixed(6), acc: Math.round(p.coords.accuracy) };
+        if (!best || fix.acc < best.acc) best = fix;
+        $("stState").textContent = "📍 Getting location… ±" + best.acc + " m";
+        if (best.acc <= 20) finish();
+      },
+      () => finish(),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 });
+    setTimeout(finish, 12000);
   });
 }
 $("stStart").onclick = async () => {
   const btn = $("stStart"); btn.disabled = true;
   $("stState").textContent = "📍 Getting location…";
-  $("stSub").textContent = "Allow location access if the phone asks.";
+  $("stSub").textContent = "Allow location access if the phone asks. This takes up to 12 seconds.";
+  stLocating = true;
   const gps = await stGps();
+  stLocating = false;
   const [blat, blon] = PLACES[placeSel.value];
   const body = { minutes: +$("stDur").value, beach: placeSel.value,
     lat: gps ? gps.lat : blat, lon: gps ? gps.lon : blon, acc: gps ? gps.acc : null };
   await stAct("/start", body);
   btn.disabled = false;
-  stGpsNote = gps ? "📍 Exact spot saved (±" + gps.acc + " m). "
-                  : "⚠️ No GPS – alert will use the beach's general area. ";
+  stGpsNote = !gps ? "⚠️ No GPS – alert will use the beach's general area. "
+    : gps.acc <= 100 ? "📍 Exact spot saved (±" + gps.acc + " m). "
+    : "⚠️ Location is rough (±" + gps.acc + " m) – turn on Precise Location or step outside, then press start again. ";
   stTick();
 };
 $("stExtend").onclick = () => stAct("/extend", { minutes: 30 });
