@@ -45,9 +45,14 @@
     background:linear-gradient(rgba(4,24,40,.25), rgba(4,24,40,.50)), url(background.jpg) center/cover no-repeat; }
   .card, select, .hr { backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
   h1, h2, .note, #status { color:#fff; text-shadow:0 1px 4px rgba(0,0,0,.65); }
+  .row { display:flex; gap:8px; margin-top:10px; }
+  .row > * { flex:1; }
+  .ghost { background:var(--card); color:var(--text); border:1px solid var(--muted); }
   .seg { display:flex; gap:6px; margin:8px 0 10px; }
   .seg button { flex:1; padding:9px 4px; font-size:.9rem; background:transparent; color:var(--text); border:1px solid var(--muted); }
   .seg button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  #fbText { flex:3; font-size:1rem; padding:12px; border-radius:12px; border:1px solid var(--muted);
+    background:var(--card); color:var(--text); min-width:0; }
 </style>
 </head>
 <body>
@@ -66,6 +71,27 @@
   <div class="sub" id="condSub"></div>
 </div>
 
+<div class="card" id="stTimer">
+  <div class="label">Safety timer</div>
+  <div class="value" id="stState">Off</div>
+  <div class="sub" id="stSub">Press the button when you enter the sea.</div>
+  <div class="row">
+    <select id="stDur">
+      <option value="15">15 min (test)</option>
+      <option value="60">1 hour</option>
+      <option value="120">2 hours</option>
+      <option value="180" selected>3 hours</option>
+      <option value="240">4 hours</option>
+    </select>
+    <button id="stStart">I'm entering the sea</button>
+  </div>
+  <div class="row">
+    <button class="ghost" id="stExtend">+30 min</button>
+    <button id="stStop">I'm out ✔</button>
+  </div>
+  <div class="sub" style="margin-top:10px"><a href="#" id="stSetup" style="color:var(--accent)">Server settings</a></div>
+</div>
+
 <div class="grid">
   <div class="card"><div class="label">Air temperature</div><div class="value" id="temp">–</div></div>
   <div class="card"><div class="label">Humidity</div><div class="value" id="hum">–</div></div>
@@ -78,6 +104,15 @@
 <div class="hours" id="hours"></div>
 <div class="note">These indicators are only rough estimates (offshore wind direction is approximate). Always follow lifeguards and beach flags.</div>
 <div id="status"></div>
+
+<div class="card" id="feedback" style="margin-top:14px">
+  <div class="label">What should be added?</div>
+  <div class="row">
+    <input id="fbText" type="text" maxlength="100" placeholder="Your idea (up to 100 characters)" autocomplete="off">
+    <button id="fbSend">Send</button>
+  </div>
+  <div class="sub" id="fbSub">0 / 100</div>
+</div>
 
 <script>
 if ("serviceWorker" in navigator) { navigator.serviceWorker.register("sw.js").catch(() => {}); }
@@ -219,10 +254,98 @@ function showHours(wd, md) {
   }
 }
 
+// ---- Safety timer (talks to your own Cloudflare Worker) ----
+let stDeadline = null, stAlerted = false, stErr = "", stGpsNote = "";
+const stGet = k => { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } };
+function stSetup() {
+  const u = prompt("Safety server address (https://….workers.dev):", stGet("stUrl"));
+  if (u === null) return;
+  const k = prompt("Access key:", stGet("stKey"));
+  if (k === null) return;
+  try { localStorage.setItem("stUrl", u.trim()); localStorage.setItem("stKey", k.trim()); } catch (e) {}
+}
+async function stCall(path, body) {
+  if (!stGet("stUrl") || !stGet("stKey")) stSetup();
+  const url = stGet("stUrl"), key = stGet("stKey");
+  if (!url || !key) throw new Error("Not set up yet");
+  const r = await fetch(url.replace(/\/+$/, "") + path, {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Key": key }, body: JSON.stringify(body || {}) });
+  if (r.status === 401) throw new Error("Wrong access key");
+  if (!r.ok) throw new Error("Server error " + r.status);
+  return r.json();
+}
+function stTick() {
+  const st = $("stState"), sub = $("stSub");
+  if (stErr) {
+    st.textContent = "❌ " + stErr;
+    sub.textContent = stDeadline ? "Could not reach the server. A timer may still be running." : "The timer was NOT started. Do not rely on it.";
+    return;
+  }
+  if (stAlerted) { st.textContent = "⚠️ Alert sent"; sub.textContent = "Your contact was alerted. Press “I'm out” to tell them you are safe."; return; }
+  if (!stDeadline) { st.textContent = "Off"; sub.textContent = "Press the button when you enter the sea."; return; }
+  const t = Math.floor(Math.max(0, stDeadline - Date.now()) / 1000), p = n => String(n).padStart(2, "0");
+  st.textContent = "⏱️ " + Math.floor(t / 3600) + ":" + p(Math.floor(t / 60) % 60) + ":" + p(t % 60);
+  sub.textContent = stGpsNote + "Alert at " + new Date(stDeadline).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " unless you press “I'm out”.";
+}
+async function stAct(path, body) {
+  try {
+    const r = await stCall(path, body);
+    stErr = ""; stDeadline = r.active ? r.deadline : null; stAlerted = !!r.alerted;
+  } catch (e) { stErr = e.message; }
+  stTick();
+}
+// Ask the phone for its exact GPS position (falls back to the beach's point after 15 s).
+function stGps() {
+  return new Promise(res => {
+    if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(
+      p => res({ lat: +p.coords.latitude.toFixed(6), lon: +p.coords.longitude.toFixed(6), acc: Math.round(p.coords.accuracy) }),
+      () => res(null),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+  });
+}
+$("stStart").onclick = async () => {
+  const btn = $("stStart"); btn.disabled = true;
+  $("stState").textContent = "📍 Getting location…";
+  $("stSub").textContent = "Allow location access if the phone asks.";
+  const gps = await stGps();
+  const [blat, blon] = PLACES[placeSel.value];
+  const body = { minutes: +$("stDur").value, beach: placeSel.value,
+    lat: gps ? gps.lat : blat, lon: gps ? gps.lon : blon, acc: gps ? gps.acc : null };
+  await stAct("/start", body);
+  btn.disabled = false;
+  stGpsNote = gps ? "📍 Exact spot saved (±" + gps.acc + " m). "
+                  : "⚠️ No GPS – alert will use the beach's general area. ";
+  stTick();
+};
+$("stExtend").onclick = () => stAct("/extend", { minutes: 30 });
+$("stStop").onclick = () => stAct("/stop");
+$("stSetup").onclick = e => { e.preventDefault(); stSetup(); };
+setInterval(stTick, 1000);
+setInterval(() => { if (stDeadline || stAlerted) stAct("/status"); }, 60000);
+if (stGet("stUrl") && stGet("stKey")) stAct("/status");
+
 placeSel.addEventListener("change", load);
 $("refresh").addEventListener("click", load);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
 load();
+
+// ---- "What should be added?" box → emailed to the owner via Formspree ----
+const FEEDBACK_URL = "https://formspree.io/f/xbgogork";   // ← replace with your Formspree form address
+$("fbText").addEventListener("input", () => { $("fbSub").textContent = $("fbText").value.length + " / 100"; });
+$("fbSend").onclick = async () => {
+  const text = $("fbText").value.trim().slice(0, 100);
+  if (!text) { $("fbSub").textContent = "Please write something first."; return; }
+  $("fbSend").disabled = true; $("fbSub").textContent = "Sending…";
+  try {
+    const r = await fetch(FEEDBACK_URL, { method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ suggestion: text, beach: placeSel.value, _subject: "Sea Weather suggestion" }) });
+    if (!r.ok) throw new Error(r.status);
+    $("fbText").value = ""; $("fbSub").textContent = "✅ Thank you! Your idea was sent.";
+  } catch (e) { $("fbSub").textContent = "❌ Could not send right now. Please try again later."; }
+  $("fbSend").disabled = false;
+};
 </script>
 </body>
 </html>
