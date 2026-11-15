@@ -53,6 +53,8 @@
   .seg button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
   #fbText { flex:3; font-size:1rem; padding:12px; border-radius:12px; border:1px solid var(--muted);
     background:var(--card); color:var(--text); min-width:0; }
+  .ct { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid rgba(127,127,127,.25); }
+  .ct input { width:22px; height:22px; }
 </style>
 </head>
 <body>
@@ -89,7 +91,21 @@
     <button class="ghost" id="stExtend">+30 min</button>
     <button id="stStop">I'm out ✔</button>
   </div>
-  <div class="sub" style="margin-top:10px"><a href="#" id="stSetup" style="color:var(--accent)">Server settings</a></div>
+  <div class="sub" style="margin-top:10px"><a href="#" id="stSetup" style="color:var(--accent)">Server settings</a>
+    &nbsp;·&nbsp; <a href="#" id="ctToggle" style="color:var(--accent)">Contacts</a></div>
+  <div id="ctPanel" style="display:none;margin-top:12px">
+    <div class="label">Emergency contacts (Telegram)</div>
+    <div class="sub">1. Share the bot link. Each contact opens it and presses <b>Start</b>.<br>
+      2. Tap <b>Find contacts</b>, tick who should get alerts, and tap <b>Save</b>.</div>
+    <div class="sub" id="ctLink" style="margin-top:6px;word-break:break-all"></div>
+    <div class="row">
+      <button class="ghost" id="ctShare">Share bot link</button>
+      <button class="ghost" id="ctFind">Find contacts</button>
+    </div>
+    <div id="ctList" style="margin-top:10px"></div>
+    <div class="row"><button id="ctSave" style="display:none">Save contacts</button></div>
+    <div class="sub" id="ctMsg"></div>
+  </div>
 </div>
 
 <div class="grid">
@@ -362,6 +378,52 @@ $("fbSend").onclick = async () => {
     $("fbText").value = ""; $("fbSub").textContent = "✅ Thank you! Your idea was sent.";
   } catch (e) { $("fbSub").textContent = "❌ Could not send right now. Please try again later."; }
   $("fbSend").disabled = false;
+};
+
+// ---- Contacts panel: who gets the Telegram alerts ----
+let ctBotUrl = "";
+$("ctToggle").onclick = e => { e.preventDefault();
+  const p = $("ctPanel"), open = p.style.display === "none";
+  p.style.display = open ? "block" : "none";
+  if (open) ctLoad();
+};
+async function ctLoad() {
+  $("ctMsg").textContent = "Loading…"; $("ctList").textContent = ""; $("ctSave").style.display = "none";
+  try {
+    const r = await stCall("/contacts");
+    ctBotUrl = r.bot ? "https://t.me/" + r.bot : "";
+    $("ctLink").textContent = ctBotUrl ? "Bot link: " + ctBotUrl : "";
+    const rows = [
+      ...r.fixed.map(c => ({ ...c, on: true, fixed: true })),
+      ...r.saved.map(c => ({ ...c, on: true })),
+      ...r.found.map(c => ({ ...c, on: false, isNew: true })) ];
+    if (!rows.length) { $("ctMsg").textContent = "No contacts yet. Share the bot link, ask them to press Start, then tap Find contacts."; return; }
+    for (const c of rows) {
+      const row = document.createElement("label"); row.className = "ct";
+      const box = document.createElement("input"); box.type = "checkbox"; box.checked = c.on; box.disabled = !!c.fixed;
+      box.dataset.id = c.id; box.dataset.name = c.name || ""; box.dataset.fixed = c.fixed ? "1" : "";
+      const txt = document.createElement("span");
+      txt.textContent = (c.name || "Contact " + c.id) + (c.fixed ? " (set on server)" : c.isNew ? " – new" : "");
+      row.append(box, txt); $("ctList").appendChild(row);
+    }
+    $("ctSave").style.display = ""; $("ctMsg").textContent = "Ticked people get the alerts.";
+  } catch (e) { $("ctMsg").textContent = "❌ " + e.message; }
+}
+$("ctFind").onclick = ctLoad;
+$("ctSave").onclick = async () => {
+  const contacts = [...$("ctList").querySelectorAll("input")]
+    .filter(b => b.checked && !b.dataset.fixed).map(b => ({ id: b.dataset.id, name: b.dataset.name }));
+  $("ctMsg").textContent = "Saving…";
+  try { await stCall("/contacts/save", { contacts }); $("ctMsg").textContent = "✅ Saved. " + contacts.length + " contact(s) from the app will get alerts."; }
+  catch (e) { $("ctMsg").textContent = "❌ " + e.message; }
+};
+$("ctShare").onclick = async () => {
+  if (!ctBotUrl) { $("ctMsg").textContent = "Tap Find contacts first to load the bot link."; return; }
+  const text = "Please open this link and press Start, so you get my sea safety alerts: " + ctBotUrl;
+  try {
+    if (navigator.share) { await navigator.share({ title: "Sea Safety", text }); return; }
+    await navigator.clipboard.writeText(text); $("ctMsg").textContent = "✅ Link copied – paste it to your contact.";
+  } catch (e) { if (e.name !== "AbortError") $("ctMsg").textContent = "Send this link to your contact: " + ctBotUrl; }
 };
 </script>
 </body>
