@@ -28,29 +28,7 @@ All file names must stay exactly as shown.
 
 ---
 
-## Part 1: Put the app online (GitHub Pages)
-
-1. Create a free account at [github.com](https://github.com).
-2. Click **+** (top right), then **New repository**.
-   - Name: `sea-weather-android`
-   - Choose **Public**
-   - Click **Create repository**
-3. Click **uploading an existing file**, drag in all the files from the table above, and click **Commit changes**. Upload the files themselves, not a zip file or a folder.
-4. Go to **Settings**, then **Pages**.
-   - **Source:** Deploy from a branch
-   - **Branch:** `main`, folder `/ (root)`
-   - Click **Save**
-5. Wait 1 to 2 minutes. Your app's address will be:
-
-   ```
-   https://YOUR-USERNAME.github.io/sea-weather-android/
-   ```
-
-   Open it in a browser to check that it works.
-
----
-
-## Part 2: Install on Android
+## Part 1:  Install on Android
 
 1. Open **Chrome** on your phone and go to your address (above).
 2. Tap the **three dots** menu at the top right.
@@ -58,18 +36,6 @@ All file names must stay exactly as shown.
 4. Tap **Install** (or **Add**) to confirm.
 
 The icon appears on your home screen and the app opens full-screen. On Samsung Internet, use the menu, then **Add page to**, then **Home screen**.
-
----
-
-## Updating the app
-
-1. Open the repository on github.com.
-2. Click **Add file**, then **Upload files**.
-3. Drag in the new file(s). A file with the same name replaces the old one.
-4. Click **Commit changes** and wait a minute or two.
-5. On the phone, close the app completely and open it again. If it still looks old, open the address in Chrome and refresh the page once.
-
-To change a file's contents directly on GitHub, click the file, then the pencil icon.
 
 ---
 
