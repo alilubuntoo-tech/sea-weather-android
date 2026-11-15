@@ -397,7 +397,7 @@ async function ctLoad() {
       ...r.fixed.map(c => ({ ...c, on: true, fixed: true })),
       ...r.saved.map(c => ({ ...c, on: true })),
       ...r.found.map(c => ({ ...c, on: false, isNew: true })) ];
-    if (!rows.length) { $("ctMsg").textContent = "No contacts yet. Share the bot link, ask them to press Start, then tap Find contacts."; return; }
+    if (!rows.length) { $("ctMsg").textContent = "No contacts yet – share the bot link, ask them to press Start, then tap Find contacts again."; return; }
     for (const c of rows) {
       const row = document.createElement("label"); row.className = "ct";
       const box = document.createElement("input"); box.type = "checkbox"; box.checked = c.on; box.disabled = !!c.fixed;
@@ -406,7 +406,11 @@ async function ctLoad() {
       txt.textContent = (c.name || "Contact " + c.id) + (c.fixed ? " (set on server)" : c.isNew ? " – new" : "");
       row.append(box, txt); $("ctList").appendChild(row);
     }
-    $("ctSave").style.display = ""; $("ctMsg").textContent = "Ticked people get the alerts.";
+    $("ctSave").style.display = "";
+    const at = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    $("ctMsg").textContent = r.found.length
+      ? "🆕 Found " + r.found.length + " new contact(s). Tick them and tap Save. (checked " + at + ")"
+      : "No new contacts yet – ask them to open the bot link and press Start, then tap Find contacts again. (checked " + at + ")";
   } catch (e) { $("ctMsg").textContent = "❌ " + e.message; }
 }
 $("ctFind").onclick = ctLoad;
