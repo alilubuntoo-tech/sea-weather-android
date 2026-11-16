@@ -8,8 +8,9 @@
 <meta name="apple-mobile-web-app-title" content="Sea Weather">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0b5ea8">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.json">
-<title>Sea Weather Android</title>
+<title>Sea Weather</title>
 <style>
   :root { --bg:#eaf4fb; --card:rgba(255,255,255,.86); --text:#12303f; --muted:#5d7a8a; --accent:#0b5ea8; }
   @media (prefers-color-scheme: dark) {
@@ -55,6 +56,8 @@
     background:var(--card); color:var(--text); min-width:0; }
   .ct { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid rgba(127,127,127,.25); }
   .ct input { width:22px; height:22px; }
+  .ow { padding:8px 0; border-bottom:1px solid rgba(127,127,127,.25); font-size:.92rem; line-height:1.4; }
+  .ow b { font-weight:600; }
 </style>
 </head>
 <body>
@@ -95,7 +98,7 @@
     &nbsp;·&nbsp; <a href="#" id="ctToggle" style="color:var(--accent)">Contacts</a></div>
   <div id="ctPanel" style="display:none;margin-top:12px">
     <div class="label">Emergency contacts (Telegram)</div>
-    <div class="sub">1. Share the bot link. Each contact opens it and presses <b>Start</b>.<br>
+    <div class="sub">1. Share <b>your</b> bot link. Each contact opens it and presses <b>Start</b>.<br>
       2. Tap <b>Find contacts</b>, tick who should get alerts, and tap <b>Save</b>.</div>
     <div class="sub" id="ctLink" style="margin-top:6px;word-break:break-all"></div>
     <div class="row">
@@ -106,6 +109,7 @@
     <div class="row"><button id="ctSave" style="display:none">Save contacts</button></div>
     <div class="sub" id="ctMsg"></div>
   </div>
+  <div class="sub" id="stPrivacy" style="margin-top:12px;opacity:.85">🔒 Privacy: when you use the safety timer, your name, the beach, your phone's location and your chosen emergency contacts are stored on the app owner's server for 30 days and are visible to the app owner. They are used only to send safety alerts.</div>
 </div>
 
 <div class="grid">
@@ -130,8 +134,18 @@
   <div class="sub" id="fbSub">0 / 100</div>
 </div>
 
+<div class="sub" style="text-align:center;margin:18px 0 6px"><a href="#" id="owToggle" style="color:var(--muted)">Owner log</a></div>
+<div class="card" id="owPanel" style="display:none">
+  <div class="label">Owner log (last 30 days)</div>
+  <div class="row"><button class="ghost" id="owRefresh">Refresh</button><button class="ghost" id="owForget">Forget owner key</button></div>
+  <div class="sub" id="owMsg"></div>
+  <div class="label" style="margin-top:12px">Running timers</div>
+  <div id="owTimers" class="sub"></div>
+  <div class="label" style="margin-top:12px">History</div>
+  <div id="owLog"></div>
+</div>
+
 <script>
-if ("serviceWorker" in navigator) { navigator.serviceWorker.register("sw.js").catch(() => {}); }
 // name: [land lat, land lon, sea lat, sea lon]  (waves are measured just offshore)
 const PLACES = {
   "Nahariya": [33.005, 35.093, 33.005, 35.030],
@@ -273,21 +287,38 @@ function showHours(wd, md) {
 // ---- Safety timer (talks to your own Cloudflare Worker) ----
 let stDeadline = null, stAlerted = false, stErr = "", stGpsNote = "", stLocating = false;
 const stGet = k => { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } };
+// Each phone gets its own random user ID, so everyone has their own timer and contacts.
+function stUid() {
+  let u = stGet("stUid");
+  if (!/^[a-f0-9]{32}$/.test(u)) {
+    const b = new Uint8Array(16); crypto.getRandomValues(b);
+    u = [...b].map(x => x.toString(16).padStart(2, "0")).join("");
+    try { localStorage.setItem("stUid", u); } catch (e) {}
+  }
+  return u;
+}
+function stAskName() {
+  const n = prompt("Your name (shown to your emergency contacts in alerts):", stGet("stName"));
+  if (n !== null && n.trim()) { try { localStorage.setItem("stName", n.trim().slice(0, 40)); } catch (e) {} }
+  return stGet("stName");
+}
 function stSetup() {
   const u = prompt("Safety server address (https://….workers.dev):", stGet("stUrl"));
   if (u === null) return;
   const k = prompt("Access key:", stGet("stKey"));
   if (k === null) return;
   try { localStorage.setItem("stUrl", u.trim()); localStorage.setItem("stKey", k.trim()); } catch (e) {}
+  stAskName();
 }
 async function stCall(path, body) {
   if (!stGet("stUrl") || !stGet("stKey")) stSetup();
   const url = stGet("stUrl"), key = stGet("stKey");
   if (!url || !key) throw new Error("Not set up yet");
   const r = await fetch(url.replace(/\/+$/, "") + path, {
-    method: "POST", headers: { "Content-Type": "application/json", "X-Key": key }, body: JSON.stringify(body || {}) });
+    method: "POST", headers: { "Content-Type": "application/json", "X-Key": key },
+    body: JSON.stringify({ ...(body || {}), uid: stUid(), name: stGet("stName") }) });
   if (r.status === 401) throw new Error("Wrong access key");
-  if (!r.ok) throw new Error("Server error " + r.status);
+  if (!r.ok) { let m = ""; try { m = (await r.json()).error || ""; } catch (e) {} throw new Error(m || "Server error " + r.status); }
   return r.json();
 }
 function stTick() {
@@ -335,6 +366,7 @@ function stGps() {
   });
 }
 $("stStart").onclick = async () => {
+  if (!stGet("stName") && !stAskName()) { stErr = "Please enter your name first"; stTick(); return; }
   const btn = $("stStart"); btn.disabled = true;
   $("stState").textContent = "📍 Getting location…";
   $("stSub").textContent = "Allow location access if the phone asks. This takes up to 12 seconds.";
@@ -391,8 +423,8 @@ async function ctLoad() {
   $("ctMsg").textContent = "Loading…"; $("ctList").textContent = ""; $("ctSave").style.display = "none";
   try {
     const r = await stCall("/contacts");
-    ctBotUrl = r.bot ? "https://t.me/" + r.bot : "";
-    $("ctLink").textContent = ctBotUrl ? "Bot link: " + ctBotUrl : "";
+    ctBotUrl = r.bot ? "https://t.me/" + r.bot + "?start=" + r.start : "";
+    $("ctLink").textContent = ctBotUrl ? "Your personal bot link: " + ctBotUrl : "";
     const rows = [
       ...r.fixed.map(c => ({ ...c, on: true, fixed: true })),
       ...r.saved.map(c => ({ ...c, on: true })),
@@ -423,12 +455,62 @@ $("ctSave").onclick = async () => {
 };
 $("ctShare").onclick = async () => {
   if (!ctBotUrl) { $("ctMsg").textContent = "Tap Find contacts first to load the bot link."; return; }
-  const text = "Please open this link and press Start, so you get my sea safety alerts: " + ctBotUrl;
+  const text = "Please open this link in Telegram and press Start, so you get my sea safety alerts: " + ctBotUrl;
   try {
     if (navigator.share) { await navigator.share({ title: "Sea Safety", text }); return; }
     await navigator.clipboard.writeText(text); $("ctMsg").textContent = "✅ Link copied – paste it to your contact.";
   } catch (e) { if (e.name !== "AbortError") $("ctMsg").textContent = "Send this link to your contact: " + ctBotUrl; }
 };
+
+// ---- Owner log (needs the separate OWNER_KEY) ----
+const OW_EV = { start: "🌊 Entered the sea", extend: "➕ Extended", stop: "✅ Out (no alert)",
+  alert: "⚠️ ALERT sent", "safe-after-alert": "✅ Safe after alert", contacts: "👥 Contacts changed" };
+const owTime = ms => new Date(ms).toLocaleString([], { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+$("owToggle").onclick = e => { e.preventDefault();
+  const p = $("owPanel"), open = p.style.display === "none";
+  p.style.display = open ? "block" : "none";
+  if (open) owLoad();
+};
+$("owRefresh").onclick = owLoad;
+$("owForget").onclick = () => { try { localStorage.removeItem("stOwner"); } catch (e) {} $("owMsg").textContent = "Owner key removed from this phone."; $("owLog").textContent = ""; $("owTimers").textContent = ""; };
+async function owLoad() {
+  let k = stGet("stOwner");
+  if (!k) { k = prompt("Owner key:") || ""; if (!k) return; try { localStorage.setItem("stOwner", k.trim()); } catch (e) {} }
+  $("owMsg").textContent = "Loading…"; $("owLog").textContent = ""; $("owTimers").textContent = "";
+  try {
+    const url = stGet("stUrl"); if (!url) throw new Error("Set up the server first (Server settings)");
+    const r = await fetch(url.replace(/\/+$/, "") + "/admin", { method: "POST",
+      headers: { "Content-Type": "application/json", "X-Owner-Key": stGet("stOwner") }, body: "{}" });
+    if (r.status === 401) { try { localStorage.removeItem("stOwner"); } catch (e) {} throw new Error("Wrong owner key"); }
+    if (!r.ok) throw new Error("Server error " + r.status);
+    const d = await r.json();
+    $("owTimers").textContent = d.timers.length
+      ? d.timers.map(x => (x.alerted ? "⚠️ " : "⏱️ ") + (x.name || "?") + " – " + (x.beach || "") + ", alert at " + owTime(x.deadline)).join("\n")
+      : "None right now.";
+    $("owTimers").style.whiteSpace = "pre-line";
+    for (const e of d.log) {
+      const row = document.createElement("div"); row.className = "ow";
+      const head = document.createElement("div");
+      const b = document.createElement("b"); b.textContent = owTime(e.t) + " · " + (e.n || "?");
+      head.append(b, document.createTextNode(" — " + (OW_EV[e.e] || e.e) + (e.m ? " (" + e.m + " min)" : "")));
+      row.appendChild(head);
+      const det = document.createElement("div"); det.className = "sub";
+      const bits = [];
+      if (e.b) bits.push(e.b);
+      if (e.dl && e.e !== "contacts") bits.push("alert time " + owTime(e.dl));
+      if (e.c) bits.push("contacts: " + e.c);
+      det.textContent = bits.join(" · ");
+      if (e.lat != null && e.e !== "contacts") {
+        const a = document.createElement("a"); a.href = "https://maps.google.com/?q=" + e.lat + "," + e.lon;
+        a.target = "_blank"; a.rel = "noopener"; a.style.color = "var(--accent)";
+        a.textContent = " 📍 map" + (e.acc ? " (±" + e.acc + " m)" : "");
+        det.appendChild(a);
+      }
+      row.appendChild(det); $("owLog").appendChild(row);
+    }
+    $("owMsg").textContent = d.log.length + " event(s). Entries are deleted automatically after " + d.keepDays + " days.";
+  } catch (e) { $("owMsg").textContent = "❌ " + e.message; }
+}
 </script>
 </body>
 </html>
